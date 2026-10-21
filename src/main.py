@@ -2,8 +2,8 @@
 
     python -m src.main check-env                 # verify interpreter, packages, credentials (offline)
     python -m src.main ping                      # Monday: one live test call to Claude
-    python -m src.main classify "text to label"  # Tuesday: classify text, print validated JSON
-    python -m src.main groq-classify "text"      # optional alternative provider (Groq); NOT the Claude test
+    python -m src.main classify "text to label"  # Tuesday: classify text with Anthropic, print validated JSON
+    python -m src.main groq-classify "text"      # classify text with Groq, print validated JSON
 
 Exit codes: 0 success, 1 API or response failure, 2 missing/invalid
 configuration or input (no request was sent).
@@ -65,7 +65,7 @@ def cmd_check_env(args: argparse.Namespace) -> int:
     try:
         settings = load_settings()
     except MissingAPIKeyError:
-        print("ANTHROPIC_API_KEY : not configured - live API calls are unavailable")
+        print("ANTHROPIC_API_KEY : not configured - Anthropic commands (ping, classify) unavailable")
     except ClaudeConfigError as exc:
         print(f"Configuration     : INVALID - {exc}")
         ok = False
@@ -77,9 +77,9 @@ def cmd_check_env(args: argparse.Namespace) -> int:
     try:
         groq_settings = load_groq_settings()
     except MissingGroqAPIKeyError:
-        print("GROQ_API_KEY      : not configured - optional Groq provider unavailable")
+        print("GROQ_API_KEY      : not configured - groq-classify unavailable")
     else:
-        print("GROQ_API_KEY      : configured (value hidden) - optional, does not replace the Claude key")
+        print("GROQ_API_KEY      : configured (value hidden)")
         print(f"Groq model        : {groq_settings.model}")
     return EXIT_OK if ok else EXIT_FAILURE
 
@@ -129,7 +129,7 @@ def cmd_groq_classify(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m src.main",
-        description="Week 1 Claude API tools (Monday: ping, Tuesday: classify).",
+        description="Week 1 LLM API tools: groq-classify (Groq); ping and classify (Anthropic).",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -140,7 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
     ping.add_argument("--prompt", default=DEFAULT_PING_PROMPT, help="message to send (default: a short test prompt)")
     ping.set_defaults(handler=cmd_ping)
 
-    classify = commands.add_parser("classify", help="Tuesday: classify a short text and print validated JSON")
+    classify = commands.add_parser("classify", help="Tuesday: classify a short text with Anthropic (Claude) and print validated JSON")
     classify.add_argument("text", nargs="*", help="text to classify; if omitted you are prompted for it")
     classify.add_argument(
         "--prompt-only",
@@ -151,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     groq = commands.add_parser(
         "groq-classify",
-        help="optional alternative provider: classify text with Groq (does not replace the Claude API test)",
+        help="classify a short text with Groq and print validated JSON",
     )
     groq.add_argument("text", nargs="*", help="text to classify; if omitted you are prompted for it")
     groq.add_argument(
@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.handler(args)
     except (MissingAPIKeyError, MissingGroqAPIKeyError) as exc:
-        print(f"Error: {exc}\nNo request was sent. See README.md, section 'Configure credentials'.", file=sys.stderr)
+        print(f"Error: {exc}\nNo request was sent. See README.md, section 'Configuration'.", file=sys.stderr)
         return EXIT_CONFIG
     except (ClaudeConfigError, GroqConfigError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

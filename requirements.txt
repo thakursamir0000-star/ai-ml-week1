@@ -1,0 +1,7 @@
+# Runtime
+anthropic>=1.15,<2        # official Claude SDK (1.x line, built on httpx2)
+httpx2>=2.0,<3            # the SDK's HTTP library; imported directly for client typing and test fakes
+python-dotenv>=1.0,<2     # reads .env without touching os.environ
+
+# Tests
+pytest>=8

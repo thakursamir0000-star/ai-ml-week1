@@ -8,7 +8,8 @@ import pytest
 
 from src import api_client
 from src.api_client import ClaudeSettings
-from tests.fakes import FAKE_API_KEY
+from src.groq_client import GroqSettings
+from tests.fakes import FAKE_API_KEY, FAKE_GROQ_API_KEY
 
 _CONFIG_ENV_VARS = (
     "ANTHROPIC_API_KEY",
@@ -17,6 +18,12 @@ _CONFIG_ENV_VARS = (
     "ANTHROPIC_PROFILE",
     "CLAUDE_MODEL",
     "CLAUDE_USE_FALLBACKS",
+    "GROQ_API_KEY",
+    "GROQ_MODEL",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_ORG_ID",
+    "OPENAI_PROJECT_ID",
 )
 
 
@@ -42,3 +49,8 @@ def block_network(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def settings() -> ClaudeSettings:
     return ClaudeSettings(api_key=FAKE_API_KEY)
+
+
+@pytest.fixture
+def groq_settings() -> GroqSettings:
+    return GroqSettings(api_key=FAKE_GROQ_API_KEY)

@@ -45,6 +45,23 @@ def build_user_prompt(text: str) -> str:
     return f"Classify this text:\n<text>\n{text}\n</text>"
 
 
+def clean_input_text(text: str) -> str:
+    """Strip ``text`` and check it is usable. Shared by the Claude and Groq workflows.
+
+    Raises:
+        ValueError: ``text`` is empty or longer than MAX_INPUT_CHARS.
+    """
+    cleaned = text.strip() if isinstance(text, str) else ""
+    if not cleaned:
+        raise ValueError("Text to classify must not be empty.")
+    if len(cleaned) > MAX_INPUT_CHARS:
+        raise ValueError(
+            f"Text is {len(cleaned)} characters; the limit is {MAX_INPUT_CHARS}. "
+            "Shorten it instead of sending a truncated version."
+        )
+    return cleaned
+
+
 def classify_text(
     text: str,
     *,
@@ -61,14 +78,7 @@ def classify_text(
         ResponseParseError: the reply was empty, not valid JSON, or failed schema
             validation (EmptyResponseError, MalformedJSONError, SchemaValidationError).
     """
-    cleaned = text.strip() if isinstance(text, str) else ""
-    if not cleaned:
-        raise ValueError("Text to classify must not be empty.")
-    if len(cleaned) > MAX_INPUT_CHARS:
-        raise ValueError(
-            f"Text is {len(cleaned)} characters; the limit is {MAX_INPUT_CHARS}. "
-            "Shorten it instead of sending a truncated version."
-        )
+    cleaned = clean_input_text(text)
 
     if settings is None:
         settings = load_settings()

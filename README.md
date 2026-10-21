@@ -11,6 +11,16 @@ Week 1 assignments for my AI/ML Engineer internship: the **Monday** and
 Wednesday (embeddings), Thursday (semantic search) and Friday (review) are
 **out of scope** for this repository so far.
 
+The repo also contains an **optional alternative provider, Groq**
+(`src/groq_client.py`). It runs the same classification task through the
+official OpenAI Python SDK pointed at Groq's OpenAI-compatible API.
+
+> **Important: Groq does not complete the Claude API requirement.** The
+> roadmap's Monday task is a working call to the **Claude API**. A successful
+> Groq call, Groq test or Groq key does not satisfy it. The Claude code paths
+> are completely separate (`ANTHROPIC_API_KEY`, `ping`, `classify`) and still
+> need a live run once Claude credentials are available.
+
 ## Status
 
 | Item | Status |
@@ -21,7 +31,9 @@ Wednesday (embeddings), Thursday (semantic search) and Friday (review) are
 | JSON parsing and schema validation (`response_parser.py`) | Done, verified by unit tests |
 | Classification workflow and CLI (`classifier.py`, `main.py`) | Done, verified against mocked HTTP responses |
 | Automated tests (offline) | Passing (see [Run the tests](#run-the-tests)) |
-| **Live Claude API call** | **Pending.** No API key or billing access yet. The code has not been run against the real API. |
+| **Live Claude API call** | **Pending.** `ANTHROPIC_API_KEY` is not configured and no live Claude request has been made. The successful Groq test below does not change this. |
+| Optional Groq provider (`groq_client.py`, `groq-classify`) | Done, verified by mocked tests and one live request |
+| Live Groq API call | **Passed** (2026-10-21): one request, succeeded on the first attempt, exit code 0, JSON passed schema validation. Optional, and separate from the Claude requirement. |
 
 ## Project structure
 
@@ -32,13 +44,15 @@ ai-ml-week1/
 │   ├── api_client.py       # Monday: settings, SDK client, send_message(), extract_text(), errors
 │   ├── response_parser.py  # Tuesday: JSON parsing + schema validation (pure, no network)
 │   ├── classifier.py       # Tuesday: classify_text() workflow (prompt -> API -> parse -> validate)
-│   └── main.py             # CLI: check-env, ping, classify
+│   ├── groq_client.py      # optional alternative provider: Groq via the OpenAI SDK
+│   └── main.py             # CLI: check-env, ping, classify, groq-classify
 ├── tests/
-│   ├── fakes.py            # fake Anthropic API at the HTTP layer (httpx2.MockTransport)
+│   ├── fakes.py            # fake Anthropic and Groq APIs at the HTTP layer (MockTransport)
 │   ├── conftest.py         # isolates env vars/.env and blocks real network access
 │   ├── test_api_client.py
 │   ├── test_response_parser.py
 │   ├── test_classifier.py
+│   ├── test_groq_client.py
 │   └── test_main.py
 ├── .env.example            # placeholder only, copy to .env
 ├── .gitattributes          # LF line endings for Windows + WSL
@@ -78,8 +92,11 @@ Python version    : 3.12.15
 anthropic         : 1.15.0
 httpx2            : 2.13.1
 python-dotenv     : 1.2.4
+openai            : 2.54.0
+httpx             : 0.28.1
 pytest            : 9.1.1
 ANTHROPIC_API_KEY : not configured - live API calls are unavailable
+GROQ_API_KEY      : not configured - optional Groq provider unavailable
 ```
 
 ## Configure credentials
@@ -87,20 +104,26 @@ ANTHROPIC_API_KEY : not configured - live API calls are unavailable
 Do this only once your supervisor provides an API key with billing enabled.
 
 ```bash
-cp .env.example .env
-nano .env                 # replace your-api-key-here with the real key
-chmod 600 .env            # optional: keep the file private
+test -f .env || cp .env.example .env   # copy the template only if .env does not exist yet
+nano .env                 # add or edit the line ANTHROPIC_API_KEY=<the real key>
 python -m src.main check-env   # should now say: configured (value hidden)
 ```
+
+Never run a plain `cp .env.example .env` once `.env` exists. It would
+overwrite the file and erase keys already in it, such as `GROQ_API_KEY`.
+`chmod 600` has no effect on Windows drives such as `/mnt/d`. `.gitignore`
+is what keeps `.env` out of Git.
 
 You can export the variable in your shell instead (`export ANTHROPIC_API_KEY=...`).
 A non-empty environment variable takes precedence over `.env`.
 
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
-| `ANTHROPIC_API_KEY` | yes | none | API key. Never printed, logged or committed. |
+| `ANTHROPIC_API_KEY` | yes (Claude) | none | API key. Never printed, logged or committed. |
 | `CLAUDE_MODEL` | no | `claude-opus-5-5` | Model ID to call. |
 | `CLAUDE_USE_FALLBACKS` | no | `true` | Server-side refusal fallback (see [Design notes](#design-notes)). |
+| `GROQ_API_KEY` | only for `groq-classify` | none | Optional Groq key. Does **not** replace `ANTHROPIC_API_KEY`. |
+| `GROQ_MODEL` | no | `openai/gpt-oss-20b` | Groq model ID. |
 
 `.env` is in `.gitignore`. If `.env` still contains the placeholder, the code
 treats the key as missing and sends nothing.
@@ -207,6 +230,70 @@ one-line message on stderr and an exit code.
 The API errors share the base class `ClaudeClientError`. The parsing errors
 share `ResponseParseError`. The original SDK exception is kept as `__cause__`.
 
+## Optional: Groq as an alternative provider
+
+> Running anything in this section does **not** complete the Monday Claude API
+> task. Keep the Claude row in the Status table as Pending until
+> `python -m src.main ping` succeeds with a real Claude key.
+
+`src/groq_client.py` runs the same classification task through Groq. It uses
+the official **OpenAI Python SDK** (`openai` 2.x) with
+`base_url="https://api.groq.com/openai/v1"`. It shares the `.env` file, the
+system prompt, input limits, and the JSON parsing and schema validation with
+the Claude workflow. It has its own settings, client, errors and CLI command,
+and does not change `api_client.py`.
+
+**Setup.** `.env` already has an empty `GROQ_API_KEY=` line. Open it in an
+editor (`nano .env`), paste your key from https://console.groq.com/keys after
+the `=` (no quotes), save, and confirm with `python -m src.main check-env`.
+
+**Run.**
+
+```bash
+python -m src.main groq-classify "I was charged twice this month."
+python -m src.main groq-classify --json-object "Please add a dark mode."
+```
+
+From Python:
+
+```python
+from src.groq_client import classify_text_with_groq
+result = classify_text_with_groq("Please add a dark mode.")   # same dict shape as classify_text()
+```
+
+The output uses the same schema as the Claude `classify` command (see
+[the schema table](#tuesday-classify-text-and-parse-the-json-response)).
+
+**Model choice.** The default is `openai/gpt-oss-20b`. As of 2026-10-21,
+Groq's docs list it as a production model (not a preview), not deprecated,
+with strict JSON-schema structured outputs. `openai/gpt-oss-120b` also
+qualifies and can be set with `GROQ_MODEL`. Groq retires models regularly;
+check https://console.groq.com/docs/deprecations if you get an HTTP 404.
+
+**Structured JSON.** By default the request sends
+`response_format={"type": "json_schema", "json_schema": {"name": "text_classification", "strict": true, "schema": ...}}`,
+so Groq constrains decoding to the schema. `--json-object` switches to
+`{"type": "json_object"}`, which guarantees valid JSON syntax only. Either
+way the reply goes through the same `json.loads` and schema validation as
+Claude's. GPT-OSS models also get `reasoning_effort="low"`. Their reasoning
+arrives in a separate `reasoning` field and is ignored; only
+`message.content` is parsed.
+
+**Groq errors.** These are separate from the Claude exceptions; the shared
+parsing errors are the same.
+
+| Exception | When | CLI exit |
+|-----------|------|----------|
+| `MissingGroqAPIKeyError` | `GROQ_API_KEY` unset, empty or placeholder (no request sent) | 2 |
+| `GroqAuthenticationError` | HTTP 401 (bad key) or 403 (not permitted) | 1 |
+| `GroqRateLimitError` | HTTP 429 after the SDK's automatic retries; `.retry_after` is kept | 1 |
+| `GroqAPIError` | any other HTTP error; `.status_code` and Groq's `.code` (e.g. `json_validate_failed`, `model_not_found`) are kept | 1 |
+| `GroqConnectionError` | network failure or timeout | 1 |
+| `GroqUnexpectedResponseError` | no choices, `finish_reason` `length`/`content_filter`, refusal, or no text content | 1 |
+| `EmptyResponseError` / `MalformedJSONError` / `SchemaValidationError` | same as for Claude | 1 |
+
+All Groq API errors share the base class `GroqClientError`.
+
 ## Run the tests
 
 ```bash
@@ -217,10 +304,11 @@ python -m pytest -v
 
 The tests need **no API key and no network**. `conftest.py` hides real
 environment variables and the real `.env`, and blocks socket connections.
-The Anthropic API is faked at the HTTP layer with `httpx2.MockTransport`.
-The real SDK still builds each request, parses each response and raises its
-own typed exceptions. Only the remote server is fake, and the JSON parsing
-and validation code runs unmocked.
+The Anthropic API is faked at the HTTP layer with `httpx2.MockTransport`, and
+Groq with `httpx.MockTransport` (the openai SDK uses `httpx`). Each real SDK
+still builds each request, parses each response and raises its own typed
+exceptions. Only the remote servers are fake, and the JSON parsing and
+validation code runs unmocked.
 
 Coverage includes: request shape (model, `max_tokens`, effort,
 structured-output schema, fallback beta header, no unsupported parameters);
@@ -230,6 +318,21 @@ body, refusal, truncation); 401/403/429/400/404/500/529 and network/timeout
 errors; JSON parsing (valid, fenced, empty, malformed variants, NaN);
 schema validation (each missing field, extra fields, wrong types/ranges);
 the CLI's output, exit codes and that the key never appears in output.
+
+Groq coverage (`test_groq_client.py`, plus CLI tests in `test_main.py`):
+- Config: key from env or `.env`; empty and placeholder keys count as
+  missing; a Groq key never satisfies the Claude key, and the Claude key is
+  never used for Groq.
+- Request shape: Groq base URL, Bearer auth, model, strict `json_schema`
+  vs `json_object`, `reasoning_effort` sent only to GPT-OSS models, and none
+  of the fields Groq rejects.
+- Extraction: missing, `None` or empty choices; non-JSON body; `null`
+  content; `length`/`content_filter`; refusal.
+- Errors: 401/403/429/400 (`json_validate_failed`)/404/500/503 and
+  network/timeout.
+- Classification: malformed JSON, empty reply, schema violations, input
+  limits.
+- CLI: the key never appears in output.
 
 ## Design notes
 
@@ -244,9 +347,10 @@ the CLI's output, exit codes and that the key never appears in output.
   the same call. If your organization isn't enabled for this beta, the API
   answers 400 mentioning `anthropic-beta`. Set `CLAUDE_USE_FALLBACKS=false`
   to use the standard endpoint.
-- **Secrets.** The key is read from the environment or `.env` and passed to
-  the SDK only. `ClaudeSettings` hides it from `repr`. The error messages and
-  CLI output never include it, and tests assert this.
+- **Secrets.** Both keys are read from the environment or `.env` and passed
+  to their own SDK only. `ClaudeSettings` and `GroqSettings` hide them from
+  `repr`. The error messages and CLI output never include them, and tests
+  assert this.
 - **Retries.** The SDK retries 408/409/429/5xx and connection errors twice
   with backoff. The code adds no retry loop of its own.
 
@@ -261,8 +365,15 @@ the CLI's output, exit codes and that the key never appears in output.
 | `HTTP 404 ... model` | The `CLAUDE_MODEL` value is wrong or not available to the organization. |
 | `HTTP 429` | Rate limited. Wait for the `retry-after` time and retry. |
 | `Could not reach the Anthropic API` | Check internet/proxy settings inside WSL. |
+| `GROQ_API_KEY is not configured` | Put your Groq key after `GROQ_API_KEY=` in `.env`. Only needed for `groq-classify`. |
+| Groq `HTTP 404 ... model_not_found` | The Groq model was retired or mistyped. Check Groq's deprecations page and set `GROQ_MODEL`. |
+| Groq `HTTP 400 ... json_validate_failed` | Groq could not produce JSON matching the schema. Retry, or rephrase the input. |
 
 ## Live verification checklist (when credentials arrive)
+
+### Claude (required for Monday): pending
+
+`ANTHROPIC_API_KEY` is not configured, and no live Claude request has been made.
 
 1. `python -m src.main check-env` shows `configured (value hidden)`.
 2. `python -m src.main ping` exits 0 and prints a reply. Record the date and output.
@@ -270,6 +381,24 @@ the CLI's output, exit codes and that the key never appears in output.
 4. `python -m src.main classify --prompt-only "Please add dark mode."` prints valid JSON.
 5. `git status` shows `.env` is **not** listed (it is ignored).
 6. Update the Status table above: change "Live Claude API call" to Done.
+
+Steps 1-6 need a **Claude** key. Running `groq-classify` with a Groq key is a
+separate, optional check and does not tick any of them.
+
+### Groq (optional): passed on 2026-10-21
+
+- [x] `python -m src.main check-env` showed `GROQ_API_KEY : configured (value hidden)`.
+- [x] `python -m src.main groq-classify "I was charged twice this month."` exited 0.
+  One live request was sent, and it succeeded on the first attempt.
+- [x] The reply was valid JSON and passed schema validation:
+
+```json
+{
+  "category": "billing",
+  "confidence": 0.99,
+  "explanation": "The user reports being charged twice, which is a billing issue."
+}
+```
 
 ## Publishing to GitHub (after review)
 

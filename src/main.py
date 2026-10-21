@@ -3,6 +3,7 @@
     python -m src.main check-env                 # verify interpreter, packages, credentials (offline)
     python -m src.main ping                      # Monday: one live test call to Claude
     python -m src.main classify "text to label"  # Tuesday: classify text, print validated JSON
+    python -m src.main groq-classify "text"      # optional alternative provider (Groq); NOT the Claude test
 
 Exit codes: 0 success, 1 API or response failure, 2 missing/invalid
 configuration or input (no request was sent).
@@ -26,13 +27,21 @@ from src.api_client import (
     send_message,
 )
 from src.classifier import classify_text
+from src.groq_client import (
+    GroqClientError,
+    GroqConfigError,
+    MissingGroqAPIKeyError,
+    classify_text_with_groq,
+    create_groq_client,
+    load_groq_settings,
+)
 from src.response_parser import ResponseParseError
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_CONFIG = 2
 
-REQUIRED_PACKAGES = ("anthropic", "httpx2", "python-dotenv")
+REQUIRED_PACKAGES = ("anthropic", "httpx2", "python-dotenv", "openai", "httpx")
 TEST_PACKAGES = ("pytest",)
 DEFAULT_PING_PROMPT = "Reply with one short sentence confirming that this API test call worked."
 
@@ -64,6 +73,14 @@ def cmd_check_env(args: argparse.Namespace) -> int:
         print("ANTHROPIC_API_KEY : configured (value hidden)")
         print(f"Model             : {settings.model}")
         print(f"Refusal fallbacks : {'on' if settings.use_fallbacks else 'off'}")
+
+    try:
+        groq_settings = load_groq_settings()
+    except MissingGroqAPIKeyError:
+        print("GROQ_API_KEY      : not configured - optional Groq provider unavailable")
+    else:
+        print("GROQ_API_KEY      : configured (value hidden) - optional, does not replace the Claude key")
+        print(f"Groq model        : {groq_settings.model}")
     return EXIT_OK if ok else EXIT_FAILURE
 
 
@@ -81,18 +98,30 @@ def cmd_ping(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def cmd_classify(args: argparse.Namespace) -> int:
-    if args.text:
-        text = " ".join(args.text)
-    else:
-        try:
-            text = input("Text to classify: ")
-        except EOFError:
-            text = ""
+def _read_text(words: list[str]) -> str:
+    """Join command-line words, or prompt for the text when none were given."""
+    if words:
+        return " ".join(words)
+    try:
+        return input("Text to classify: ")
+    except EOFError:
+        return ""
 
+
+def cmd_classify(args: argparse.Namespace) -> int:
+    text = _read_text(args.text)
     settings = load_settings()
     client = create_client(settings)
     result = classify_text(text, settings=settings, client=client, use_structured_output=not args.prompt_only)
+    print(json.dumps(result, indent=2))
+    return EXIT_OK
+
+
+def cmd_groq_classify(args: argparse.Namespace) -> int:
+    text = _read_text(args.text)
+    settings = load_groq_settings()
+    client = create_groq_client(settings)
+    result = classify_text_with_groq(text, settings=settings, client=client, use_json_schema=not args.json_object)
     print(json.dumps(result, indent=2))
     return EXIT_OK
 
@@ -119,6 +148,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip structured outputs and rely on the JSON-only prompt plus local validation",
     )
     classify.set_defaults(handler=cmd_classify)
+
+    groq = commands.add_parser(
+        "groq-classify",
+        help="optional alternative provider: classify text with Groq (does not replace the Claude API test)",
+    )
+    groq.add_argument("text", nargs="*", help="text to classify; if omitted you are prompted for it")
+    groq.add_argument(
+        "--json-object",
+        action="store_true",
+        help="use JSON object mode (valid JSON only) instead of strict JSON-schema mode; still validated locally",
+    )
+    groq.set_defaults(handler=cmd_groq_classify)
     return parser
 
 
@@ -126,16 +167,16 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.handler(args)
-    except MissingAPIKeyError as exc:
+    except (MissingAPIKeyError, MissingGroqAPIKeyError) as exc:
         print(f"Error: {exc}\nNo request was sent. See README.md, section 'Configure credentials'.", file=sys.stderr)
         return EXIT_CONFIG
-    except (ClaudeConfigError, ValueError) as exc:
+    except (ClaudeConfigError, GroqConfigError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
     except ResponseParseError as exc:
-        print(f"Error: Claude's reply could not be used: {exc}", file=sys.stderr)
+        print(f"Error: the model's reply could not be used: {exc}", file=sys.stderr)
         return EXIT_FAILURE
-    except ClaudeClientError as exc:
+    except (ClaudeClientError, GroqClientError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_FAILURE
 

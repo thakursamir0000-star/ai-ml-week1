@@ -1,9 +1,10 @@
-"""Test doubles for the Anthropic API.
+"""Test doubles for the Anthropic and Groq APIs.
 
-The fake sits at the HTTP layer (``httpx2.MockTransport``): the real
-``anthropic`` SDK builds the request, parses the response and raises its own
-typed exceptions, while nothing ever leaves the machine. Only the remote
-server is faked; our parsing and validation code runs for real.
+The fakes sit at the HTTP layer (``httpx2.MockTransport`` for the anthropic
+SDK, ``httpx.MockTransport`` for the openai SDK): the real SDK builds the
+request, parses the response and raises its own typed exceptions, while
+nothing ever leaves the machine. Only the remote server is faked; our parsing
+and validation code runs for real.
 """
 
 from __future__ import annotations
@@ -13,11 +14,39 @@ from collections.abc import Callable
 from typing import Any
 
 import anthropic
+import httpx
 import httpx2
+import openai
 
 from src.api_client import ClaudeSettings, create_client
+from src.groq_client import GroqSettings, create_groq_client
 
 FAKE_API_KEY = "sk-ant-test-0000-not-a-real-key"
+FAKE_GROQ_API_KEY = "gsk_test_0000_not_a_real_key"
+
+
+class _RecordingServer:
+    """Calls ``handler`` for each request and keeps every request it receives."""
+
+    def __init__(self, handler: Callable[[Any], Any]) -> None:
+        self._handler = handler
+        self.requests: list[Any] = []
+
+    def __call__(self, request: Any) -> Any:
+        self.requests.append(request)
+        return self._handler(request)
+
+    @property
+    def last_request(self) -> Any:
+        assert self.requests, "no request was sent"
+        return self.requests[-1]
+
+    @property
+    def last_json(self) -> dict[str, Any]:
+        return json.loads(self.last_request.content)
+
+
+# --- Anthropic ---------------------------------------------------------------
 
 
 def text_block(text: str) -> dict[str, Any]:
@@ -55,27 +84,52 @@ def respond(status: int, body: dict[str, Any], headers: dict[str, str] | None = 
     return lambda request: httpx2.Response(status, json=body, headers=headers)
 
 
-class FakeAnthropicAPI:
+class FakeAnthropicAPI(_RecordingServer):
     """Stands in for api.anthropic.com and records every request it receives."""
-
-    def __init__(self, handler: Callable[[httpx2.Request], httpx2.Response]) -> None:
-        self._handler = handler
-        self.requests: list[httpx2.Request] = []
-
-    def __call__(self, request: httpx2.Request) -> httpx2.Response:
-        self.requests.append(request)
-        return self._handler(request)
-
-    @property
-    def last_request(self) -> httpx2.Request:
-        assert self.requests, "no request was sent"
-        return self.requests[-1]
-
-    @property
-    def last_json(self) -> dict[str, Any]:
-        return json.loads(self.last_request.content)
 
     def client(self, settings: ClaudeSettings) -> anthropic.Anthropic:
         # max_retries=0: SDK retries would only repeat the same canned answer.
         transport = httpx2.MockTransport(self)
         return create_client(settings, max_retries=0, http_client=httpx2.Client(transport=transport))
+
+
+# --- Groq (OpenAI-compatible) ------------------------------------------------
+
+
+def chat_completion_body(
+    content: str | None,
+    *,
+    finish_reason: str = "stop",
+    **message_extra: Any,
+) -> dict[str, Any]:
+    """A Groq chat completion body shaped like the real one (GPT-OSS adds ``reasoning``)."""
+    message = {"role": "assistant", "content": content, "reasoning": "Short reasoning text.", **message_extra}
+    return {
+        "id": "chatcmpl-test-0001",
+        "object": "chat.completion",
+        "created": 1760000000,
+        "model": "openai/gpt-oss-20b",
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason, "logprobs": None}],
+        "usage": {"prompt_tokens": 120, "completion_tokens": 40, "total_tokens": 160},
+    }
+
+
+def groq_error_body(message: str, error_type: str = "invalid_request_error", code: str | None = None) -> dict[str, Any]:
+    """A Groq error body shaped like the real one."""
+    error: dict[str, Any] = {"message": message, "type": error_type}
+    if code is not None:
+        error["code"] = code
+    return {"error": error}
+
+
+def groq_respond(status: int, body: dict[str, Any], headers: dict[str, str] | None = None) -> Callable[[httpx.Request], httpx.Response]:
+    """Handler that always answers with the same status and JSON body."""
+    return lambda request: httpx.Response(status, json=body, headers=headers)
+
+
+class FakeGroqAPI(_RecordingServer):
+    """Stands in for api.groq.com and records every request it receives."""
+
+    def client(self, settings: GroqSettings) -> openai.OpenAI:
+        transport = httpx.MockTransport(self)
+        return create_groq_client(settings, max_retries=0, http_client=httpx.Client(transport=transport))
